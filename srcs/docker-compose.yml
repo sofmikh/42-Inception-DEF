@@ -1,0 +1,92 @@
+# =============================================================
+# Inception - Docker Compose service orchestration
+#
+# Three services, all on the same internal Docker network:
+#   nginx     -> HTTPS reverse proxy, the only entry point
+#   wordpress -> WordPress + PHP-FPM, processes PHP requests
+#   mariadb   -> MySQL-compatible database
+#
+# Rules enforced:
+#   - No "network: host" (would bypass Docker network isolation)
+#   - No "links:" (deprecated, replaced by Docker DNS on networks)
+#   - No "--link" in any script
+# =============================================================
+
+services:
+
+  # ── NGINX: the only container exposed to the outside world ──
+  nginx:
+    build: ./requirements/nginx   # build from our custom Dockerfile
+    container_name: nginx
+    image: nginx                  # image name must match service name
+    depends_on:
+      - wordpress                 # wait for wordpress before starting
+    ports:
+      - "443:443"                 # only port 443 (HTTPS) is exposed to the host
+    volumes:
+      - wordpress_data:/var/www/html  # shared volume: serves WordPress static files
+    networks:
+      - inception
+    env_file:
+      - .env                      # loads DOMAIN_NAME for the SSL certificate
+    restart: always               # restart automatically if the container crashes
+
+  # ── WORDPRESS: PHP-FPM process manager running WordPress ──
+  wordpress:
+    build: ./requirements/wordpress
+    container_name: wordpress
+    image: wordpress
+    depends_on:
+      - mariadb                   # wait for mariadb before starting
+    volumes:
+      - wordpress_data:/var/www/html  # shared with nginx to serve PHP files
+    networks:
+      - inception
+    env_file:
+      - .env                      # loads DB credentials and WP config
+    restart: always
+
+  # ── MARIADB: relational database for WordPress ──
+  mariadb:
+    build: ./requirements/mariadb
+    container_name: mariadb
+    image: mariadb
+    volumes:
+      - mariadb_data:/var/lib/mysql   # persists database files on the host
+    networks:
+      - inception
+    env_file:
+      - .env                      # loads DB_NAME, DB_USER, DB_PASSWORD, DB_ROOT_PASSWORD
+    restart: always
+
+# =============================================================
+# Volumes: bind-mount host directories into containers
+# Data is stored at /home/smikhail/data/ on the host,
+# so it persists across container restarts and VM reboots
+# =============================================================
+volumes:
+  wordpress_data:
+    name: wordpress_data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/smikhail/data/wordpress
+
+  mariadb_data:
+    name: mariadb_data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/smikhail/data/mariadb
+
+# =============================================================
+# Network: private bridge network shared by all three containers
+# Containers communicate using their service name as hostname
+# (e.g. WordPress connects to "mariadb:3306" via Docker DNS)
+# =============================================================
+networks:
+  inception:
+    name: inception
+    driver: bridge
